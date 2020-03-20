@@ -1,0 +1,16 @@
+[package]
+name = "FaceCamera2020"
+version = "0.1.0"
+authors = ["Joseph Catrambone <jo.jcat@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+camera_capture = "0.5.0"
+#image = "0.23.1" Camera capture uses a different version of image.
+macroquad = "0.1.3"
+nalgebra = "0.20"
+#opencv = {version = "0.32", features = ["contrib", "buildtime-bindgen"]}
+rand = "0.7.3"
+rayon = "1.1"
