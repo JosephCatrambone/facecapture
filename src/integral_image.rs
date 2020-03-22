@@ -7,27 +7,50 @@ pub struct IntegralImage {
 
 impl IntegralImage {
 	pub fn new_from_image_data(width: usize, height: usize, pixel_data: &Vec<u8>) -> Self {
-		let mut integral_data = vec![0u32; width * height];
-		for y in 0..height {
-			for x in 0..width {
-				let i = x + y*width;
+		IntegralImage::new_from_image_data_subsampled(width, height, pixel_data, 1, 1)
+	}
+	
+	pub fn new_from_image_data_subsampled(width: usize, height: usize, pixel_data: &Vec<u8>, x_step:usize, y_step:usize) -> Self {
+		assert_eq!(width*height, pixel_data.len());
+		let new_width = width/x_step;
+		let new_height = height/y_step;
+		let mut integral_data = vec![0u32; new_width*new_height];
+		for y in 0..new_height {
+			for x in 0..new_width {
+				let original_index = (x*x_step) + ((y*y_step)*width);
+				let new_index = x + y*new_width;
 				
 				if x > 0 {
-					integral_data[i] += integral_data[i-1];
+					integral_data[new_index] += integral_data[new_index-1];
 				}
 				if y > 0 {
-					integral_data[i] += integral_data[i-width];
+					integral_data[new_index] += integral_data[new_index-new_width];
 				}
 				if x > 0 && y > 0 {
-					integral_data[i] -= integral_data[(i-1)-width];
+					integral_data[new_index] -= integral_data[(new_index-1)-new_width];
 				}
-				integral_data[i] += pixel_data[i] as u32;
+				integral_data[new_index] += pixel_data[original_index] as u32;
 			}
 		}
 		IntegralImage {
-			width,
-			height,
+			width:new_width,
+			height:new_height,
 			integral_data
+		}
+	}
+	
+	// THIS PERFORMS A COPY!  TODO: Make a 'view' method or something.
+	pub fn new_from_region(&self, x0:usize, y0:usize, x1:usize, y1:usize) -> Self {
+		let mut data = vec![0u32; (x1-x0)*(y1-y0)];
+		for y in y0..y1 {
+			for x in x0..x1 {
+				data.push(self.integral_data[x + y*self.width]);
+			}
+		}
+		IntegralImage {
+			width: x1-x0,
+			height: y1-y0,
+			integral_data: data
 		}
 	}
 	
@@ -41,7 +64,7 @@ impl IntegralImage {
 		// If we want to find the sum of the KLOP area, we can take  P, the sum of the rect,
 		// less H, the sum of that top half, less N, the sum of the left half, plus F, since we took
 		// out that top-left section twice.
-		assert!(x1 > x0 && y1 > y0);
+		assert!(x1 >= x0 && y1 >= y0 && x1 < self.width && y1 < self.height);
 		let bottom_right = self.integral_data[x1 + (y1*self.width)];
 		let left = if x0 == 0 { 0 } else { self.integral_data[(x0-1) + (y1*self.width)] };
 		let top = if y0 == 0 { 0 } else { self.integral_data[x1 + ((y0-1)*self.width)]};
@@ -65,6 +88,8 @@ mod tests {
 		]);
 		assert_eq!(img.get_region_sum(0, 0, 4, 3), 1 + 1 + 2 + 3 + 1 + 1);
 		assert_eq!(img.get_region_sum(0, 0, 1, 1), 1 + 2);
+		assert_eq!(img.get_region_sum(2, 0, 2, 2), 1 + 1);
+		assert_eq!(img.get_region_sum(0, 2, 2, 2), 3 + 1);
 		assert_eq!(img.integral_data, vec![
 			1, 1, 2, 2, 2,
 			3, 3, 4, 4, 4,
