@@ -1,5 +1,7 @@
 
-use super::integral_image::IntegralImage;
+use crate::decision_tree::DecisionTree;
+use crate::haar_like_feature::{HaarFeature, make_3x3_haar};
+use crate::integral_image::IntegralImage;
 
 use rand::{thread_rng, Rng};
 use rand::distributions::Uniform;
@@ -23,30 +25,33 @@ const DETECTOR_SIZE:u32 = 32u32;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FaceDetector {
-	classifier_ensemble: Vec<WeakClassifier>
+	classifier_ensemble: Vec<DecisionTree>,
+	features: Vec<HaarFeature>,
 }
 
 impl FaceDetector {
-	fn new() -> Self {
+	pub fn new() -> Self {
 		FaceDetector {
-			classifier_ensemble: vec![]
+			classifier_ensemble: vec![],
+			features: vec![],
 		}
 	}
 	
 	pub fn detect_face(&self, image_width: usize, image_height: usize, image_data: &Vec<u8>) -> Vec::<DetectedFace> {
 		let mut results = vec![];
+		let mut max_face = 0f32;
 		
 		//let img = IntegralImage::new_from_image_data(image_width, image_height, image_data);
 		
-		for scale in 3..16 {
+		for scale in 5..11 { // 6 - 11 seems big enough
 			let img = IntegralImage::new_from_image_data_subsampled(image_width, image_height, image_data, scale, scale);
-			for y in (0..img.height - DETECTOR_SIZE as usize).step_by(DETECTOR_SIZE as usize) {
-				for x in (0..img.width - DETECTOR_SIZE as usize).step_by(DETECTOR_SIZE as usize) {
+			for y in (0..img.height - DETECTOR_SIZE as usize).step_by(DETECTOR_SIZE as usize/scale) {
+				for x in (0..img.width - DETECTOR_SIZE as usize).step_by(DETECTOR_SIZE as usize/scale) {
 					let roi = img.new_from_region(x, y, x + DETECTOR_SIZE as usize, y + DETECTOR_SIZE as usize);
 					//if !self.predict(&roi) { continue; }
-					let p = self.predict_with_probability(&roi);
-					//let p = self.predict(&roi);
-					if self.predict(&roi) {
+					let p = self.probability(&roi);
+					//if self.predict(&roi) {
+					if p > max_face {
 						let f = DetectedFace {
 							x: scale*x,
 							y: scale*y,
@@ -56,6 +61,7 @@ impl FaceDetector {
 							confidence: p
 						};
 						results.push(f);
+						max_face = p;
 					}
 				}
 			}
@@ -64,300 +70,59 @@ impl FaceDetector {
 		results
 	}
 	
-	pub fn predict_with_probability(&self, example:&IntegralImage) -> f32 {
-		let mut possible_weight = 0.0f32;
-		let mut total_weight = 0.0f32;
-		for c in &self.classifier_ensemble {
-			possible_weight += c.weight.abs();
-			if c.predict(example) {
-				total_weight += c.weight;
-			} else {
-				total_weight -= c.weight;
-			}
-		}
-		((total_weight / possible_weight) + 1f32) / 2f32
-	}
-	
-	// Faster than predict with probability.  Returns FALSE as soon as the first negative is found.
-	// Since we sort classifier_ensemble by the lowest false negative rate first...
-	pub fn predict(&self, example:&IntegralImage) -> bool {
-		self.predict_with_consensus(example, Some(5), Some(16)) // Since we bias for low false negatives, we emphasize early out.
-	}
-	
-	pub fn predict_with_consensus(&self, example:&IntegralImage, minimum_true:Option<u16>, minimum_false:Option<u16>) -> bool {
+	pub fn probability(&self, example:&IntegralImage) -> f32 {
+		let x = self.vectorize_example(example);
 		let mut yeas = 0;
 		let mut nays = 0;
-		let min_yeas = minimum_true.unwrap_or((self.classifier_ensemble.len()/2) as u16);
-		let min_nays = minimum_false.unwrap_or((self.classifier_ensemble.len()/2) as u16);
-		assert!(min_yeas + min_nays < self.classifier_ensemble.len() as u16);
-		for c in &self.classifier_ensemble[..(min_yeas+min_nays) as usize] {
-			let p = c.predict(example);
-			if (p && c.weight > 0.0) || (!p && c.weight < 0.0) {
+		for c in &self.classifier_ensemble {
+			if c.predict(&x) {
 				yeas += 1;
 			} else {
 				nays += 1;
 			}
-			
-			if yeas >= min_yeas {
-				return true;
-			} else if nays >= min_nays {
-				return false;
-			}
 		}
-		return yeas > nays;
+		(yeas as f32) / (yeas + nays) as f32
+	}
+	
+	pub fn predict(&self, example:&IntegralImage) -> bool {
+		self.probability(example) > 0.5
+	}
+	
+	fn vectorize_example(&self, example:&IntegralImage) -> Vec<f32> {
+		let mut x = vec![0f32; self.features.len()];
+		for (i, feat) in self.features.iter().enumerate() {
+			x[i] = feat.probability(example);
+		}
+		x
 	}
 	
 	pub fn train(&mut self, examples:Vec<&IntegralImage>, labels:Vec<bool>) {
-		let mut examples = examples;
-		let mut labels = labels;
-		let mut classifiers_to_keep:usize = 500; // Viola + Jones used 38, but they were smaller.
-		//let mut candidate_classifiers: Vec<WeakClassifier> = (0..2000).map(|_|{WeakClassifier::new_random(DETECTOR_SIZE)}).collect();
-		let mut candidate_classifiers = make_2x2_haar(DETECTOR_SIZE as usize, DETECTOR_SIZE as usize);
-		candidate_classifiers.extend(make_3x3_haar(DETECTOR_SIZE as usize, DETECTOR_SIZE as usize));
-		let mut classifiers = Vec::<WeakClassifier>::with_capacity(classifiers_to_keep);
-		let mut performance = Vec::<(u32, u32, u32, u32, f32)>::with_capacity(classifiers_to_keep);
+		let classifiers_to_keep:usize = 50; // Viola + Jones used 38, but they were smaller.
+		self.features = make_3x3_haar(DETECTOR_SIZE as usize, DETECTOR_SIZE as usize);
 		
-		// Pick the weak learner that minimizes the number of misclassifications for the data.
-		while classifiers.len() < classifiers_to_keep && !candidate_classifiers.is_empty() {
-			let mut lowest_score = 10.0f32;
-			let mut best_classifier_index = 0usize;
-			let mut best_error_rates = (10000, 100000, 1000000, 1000000, 1f32);
-			let mut have_candidate = false;
-			
-			// Parallel evaluate classifiers.
-			let classifier_performance:Vec::<(usize, (u32, u32, u32, u32, f32))> = candidate_classifiers.par_iter().enumerate().map(|(idx, c)|{
-				(idx, evaluate_classifier(&examples, &labels, &c))
-			}).collect();
-
-			lowest_score = 100_000.0;
-			println!("Start lowest gini: {}", lowest_score);
-			for (idx, error_rates) in classifier_performance {
-				let (true_positives, true_negatives, false_positives, false_negatives, gini) = error_rates;
-				if true_positives == 0 || true_negatives == 0 || false_positives == 0 || false_negatives == 0 {
-					continue // Ignore those that miss one category completely.
-				}
-				let score = gini; // We want a low gini score, but also want really few false negatives.
-				if score < lowest_score { // Normally we would just compare gini, but we want to emphasize very low false negative rates.
-					lowest_score = score;
-					best_classifier_index = idx;
-					best_error_rates = error_rates;
-					println!("TP/TN/FP/FN/Gini:{:?}", &error_rates);
-					have_candidate = true;
-				}
-			}
-			println!("Len Classifiers: {}\t\tCandidates: {}", &classifiers.len(), &candidate_classifiers.len());
-			
-			if lowest_score.is_nan() || lowest_score.is_infinite() {
-				break
-			}
-			
-			assert!(have_candidate); // Training can fail if we never find a non-trivial classifier.
-			
-			// Calculate the amount of say for the classifier.
-			let total_error = 1e-3f64 + (best_error_rates.2 + best_error_rates.3) as f64 / examples.len() as f64;
-			let amount_of_say = 0.5 * ((1.0 - total_error) / total_error).ln();
-			let mut classifier = candidate_classifiers.remove(best_classifier_index);
-			classifier.weight = amount_of_say as f32;
-			
-			// Reweight the examples.
-			let base_sample_weight: f32 = 1.0f32 / (1f32 + examples.len() as f32);
-			let mut new_weights_temp: Vec<f32> = (&examples).iter().zip(&labels).map(|(x, y)| {
-				// For correctly classified examples, new weight is sample_weight * e^-amount_of_say.
-				// For incorrectly classified examples, new weight is sample_weight * e^amount_of_say.
-				let correct = classifier.predict(x) == *y;
-				if correct {
-					base_sample_weight * (-classifier.weight).exp()
-				} else {
-					base_sample_weight * (classifier.weight).exp()
-				}
-			}).collect();
-			let sum_weights: f32 = new_weights_temp.iter().sum();
-			let new_weights: Vec<f32> = new_weights_temp.iter().map(|w| { (*w) / sum_weights }).collect();
-			
-			// Sample from the examples.
-			// _Instead of using weighted gini index_, make a new collection via randomly sampling _based on the weight_.
-			let new_indices:Vec<usize> = (0..examples.len()).into_par_iter().map(|_|{
-				let mut rng = thread_rng();
-				let mut n = rng.gen::<f32>();
-				assert!(n >= 0f32 && n <= 1f32);
-				let mut i = 0;
-				for (idx, w) in new_weights.iter().enumerate() {
-					if n < *w {
-						i = idx;
-						break;
-					} else {
-						n -= *w;
-					}
-				}
-				i
-			}).collect();
-			
-			let mut new_examples = vec![];
-			let mut new_labels = vec![];
-			for i in new_indices {
-				new_examples.push(examples[i]);
-				new_labels.push(labels[i]);
-			}
-			examples = new_examples;
-			labels = new_labels;
-			
-			classifiers.push(classifier);
-			performance.push(best_error_rates);
+		let mut converted_examples = vec![];
+		for (example, label) in examples.iter().zip(&labels) {
+			converted_examples.push(self.vectorize_example(example));
 		}
 		
-		// Now that we have all our classifiers, we should sort them by their False negative rate with GINI as the tie breaker.
-		let mut classifiers_with_performance: Vec::<(f32, &WeakClassifier)> = classifiers.iter().zip(performance).map(|(c, perf)| {
-			let (true_positives_a, true_negatives_a, false_positives_a, false_negatives_a, gini_a) = perf;
-			let metric = (1+false_negatives_a) as f32 * gini_a;
-			(metric, c)
-		}).collect();
-		classifiers_with_performance.sort_by(|a, b|{
-			a.0.partial_cmp(&b.0).unwrap()
-		});
-		self.classifier_ensemble.clear();
-		for (_, c) in classifiers_with_performance {
-			self.classifier_ensemble.push(c.clone());
-		}
-	}
-}
-
-//
-// Weak Classifier
-//
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WeakClassifier {
-	rectangles: Vec<(u32, u32, u32, u32)>, // x0, y0, x1, y1
-	weight: f32,
-}
-
-impl WeakClassifier {
-	fn predict(&self, integral_image:&IntegralImage) -> bool {
-		let mut positive_regions = 0;
-		let mut negative_regions = 0;
-		for (i, (ax, ay, bx, by)) in self.rectangles.iter().enumerate() {
-			let positive_region = (i%2 == 1);
-			
-			//let region_size = ((dx*dy) as f32).abs();
-			let region_sum = integral_image.get_region_sum(
-				*ax as usize, *ay as usize,
-				*bx as usize, *by as usize
-			);
-			
-			if positive_region {
-				positive_regions += region_sum;
-			} else {
-				negative_regions += region_sum;
-			}
-		}
+		let mut rng = thread_rng();
 		
-		return positive_regions > negative_regions;
-	}
-}
-
-fn make_2x2_haar(max_width:usize, max_height:usize) -> Vec<WeakClassifier> {
-	let max_width:u32 = max_width as u32;
-	let max_height:u32 = max_height as u32;
-	let mut res = Vec::<WeakClassifier>::new();
-	for y in 0..max_height-2 {
-		for x in 0..max_width-2 {
-			// Vertical bars.
-			res.push(
-				WeakClassifier {
-					rectangles: vec![
-						(x, y, x+1, y+2),
-						(x+1, y, x+2, y+2)
-					],
-					weight: 0.0
+		for _ in 0..classifiers_to_keep {
+			let mut d = DecisionTree::new();
+			// Randomly sample some data from examples for training.
+			let mut x = vec![];
+			let mut y = vec![];
+			for (example, label) in converted_examples.iter().zip(&labels) {
+				if rng.gen_bool(0.1) { // Use 10% of data.
+					x.push(example);
+					y.push(*label);
 				}
-			);
-			// Horizontal
-			res.push(
-				WeakClassifier {
-					rectangles: vec![
-						(x, y, x+2, y+1),
-						(x, y+1, x+2, y+2)
-					],
-					weight: 0.0
-				}
-			);
+			}
+			// And fit the tree.
+			d.train(&x, &y, 3);
+			self.classifier_ensemble.push(d);
 		}
 	}
-	res
-}
-
-fn make_3x3_haar(max_width:usize, max_height:usize) -> Vec<WeakClassifier> {
-	let max_width:u32 = max_width as u32;
-	let max_height:u32 = max_height as u32;
-	let mut res = Vec::<WeakClassifier>::new();
-	for y in 0..max_height-3 {
-		for x in 0..max_width-3 {
-			// Vertical bars.
-			res.push(
-				WeakClassifier {
-					rectangles: vec![
-						(x, y, x+1, y+3),
-						(x+1, y, x+2, y+3),
-						(x+3, y, x+3, y+3),
-					],
-					weight: 0.0
-				}
-			);
-			// Horizontal
-			res.push(
-				WeakClassifier {
-					rectangles: vec![
-						(x, y, x+3, y+1),
-						(x, y+1, x+3, y+2),
-						(x, y+2, x+3, y+3),
-					],
-					weight: 0.0
-				}
-			);
-		}
-	}
-	res
-}
-
-fn gini_index(true_positive:u32, true_negative:u32, false_positive:u32, false_negative:u32) -> f32 {
-	let total_count = true_positive + true_negative + false_positive + false_negative + 1;
-	let num_positive = true_positive + false_negative + 1;
-	let num_negative = true_negative + false_positive + 1;
-	
-	let p_positive = num_positive as f32 / total_count as f32;
-	let p_negative = num_negative as f32 / total_count as f32;
-	
-	let p_true_positive = true_positive as f32 / num_positive as f32;
-	let p_false_negative = false_negative as f32 / num_positive as f32;
-	let p_true_negative = true_negative as f32 / num_negative as f32;
-	let p_false_positive = false_positive as f32 / num_negative as f32;
-	
-	let gini_positive = 1.0f32 - (p_true_positive*p_true_positive + p_false_negative*p_false_negative);
-	let gini_negative = 1.0f32 - (p_true_negative*p_true_negative + p_false_positive*p_false_positive);
-	let result = gini_positive*p_positive + gini_negative*p_negative;
-	//assert!(!result.is_nan());
-	result
-}
-
-fn evaluate_classifier(examples:&Vec<&IntegralImage>, labels:&Vec<bool>, classifier:&WeakClassifier) -> (u32, u32, u32, u32, f32) {
-	let mut true_positives = 0;
-	let mut true_negatives = 0;
-	let mut false_positives = 0;
-	let mut false_negatives = 0;
-	for (x, y) in (*examples).iter().zip(labels) {
-		let prediction = classifier.predict(x);
-		if *y && prediction {
-			true_positives += 1;
-		} else if *y && !prediction {
-			false_negatives += 1;
-		} else if !*y && prediction {
-			false_positives += 1;
-		} else if !*y && !prediction {
-			true_negatives += 1;
-		}
-	}
-	let gini = gini_index(true_positives, true_negatives, false_positives, false_negatives);
-	return (true_positives, true_negatives, false_positives, false_negatives, gini);
 }
 
 #[cfg(test)]
@@ -371,59 +136,6 @@ mod tests {
 		($a:expr, $b:expr) => {
 			assert!(($a as f32 - $b as f32).abs() < 1e-3f32, "{} !~= {}", $a, $b);
 		};
-	}
-	
-	#[test]
-	fn weak_classifier_sanity() {
-		let img_data = vec![
-		//	0  1  2  3  4  5  6  7  8  9 10 11
-			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0
-			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 1
-			0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 0, 0, // 2
-			0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 0, 0, // 3
-			0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, // 4
-			0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, // 5
-			0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, // 6
-			0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0, // 7
-			0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, // 8
-			0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, // 9
-		];
-		let img = IntegralImage::new_from_image_data(12, 10, &img_data);
-		let column_detector = WeakClassifier {
-			rectangles: vec![
-				(0, 2, 1, 7),
-				(2, 2, 3, 7),
-				(4, 2, 5, 7)
-			],
-			weight: 0.1
-		};
-		
-		assert!(column_detector.predict(&img));
-		//assert!(angle_detector.predict(&img));
-		//assert!(!bar_detector.predict(&img));
-	}
-	
-	#[test]
-	fn test_gini() {
-		/*
-		P(truth = yes) = 6/10
-		P(truth = no) = 4/10
-		P(truth = yes and foo = yes) = 4/6
-		P(truth = yes and foo = no) = 2/6
-		Gini index = 1 - ((4/6)^2 + (2/6)^2) = 0.45
-		P(truth = no and foo = yes) = 0/4
-		P(truth = no and foo = no) = 4/4
-		Gini index = 1 - (0^2 + 1^2) = 0
-		Gini index = (6/10)*0.45 + (4/10)*0 = 0.27
-		*/
-		//assert_approx_eq!(gini_index(4, 4, 0, 2), 0.2666);
-		
-		let perfect_classifier_score = gini_index(6, 6, 0, 0);
-		let okay_classifier_score = gini_index(3, 4, 1, 1);
-		let shitty_classifier_score = gini_index(3, 3, 3, 3);
-		assert!(perfect_classifier_score < okay_classifier_score);
-		assert!(okay_classifier_score < shitty_classifier_score);
-		assert!(perfect_classifier_score < shitty_classifier_score);
 	}
 	
 	#[test]
@@ -449,7 +161,7 @@ mod tests {
 			let resized = IntegralImage::new_from_image_data_subsampled(128, 128, &img_buffer, 128/DETECTOR_SIZE as usize, 128/DETECTOR_SIZE as usize);
 			examples.push(resized);
 			labels.push(true);
-			if examples.len() > 5000 {
+			if examples.len() > 50000 {
 				break;
 			}
 		}
@@ -457,7 +169,7 @@ mod tests {
 			let resized = IntegralImage::new_from_image_data_subsampled(128, 128, &img_buffer, 128/DETECTOR_SIZE as usize, 128/DETECTOR_SIZE as usize);
 			examples.push(resized);
 			labels.push(false);
-			if examples.len() > 100000 {
+			if examples.len() > 250000 {
 				break;
 			}
 		}
@@ -485,9 +197,8 @@ mod tests {
 		let mut false_negative = 0;
 		
 		for (x, y) in test_x.iter().zip(&test_y) {
-			let proba = face_detector.predict_with_probability(x);
 			let prediction = face_detector.predict(x);
-			println!("Truth: {}  Prediction: {}  Probability: {}", *y, prediction, proba);
+			println!("Truth: {}  Prediction: {}", *y, prediction);
 			if *y {
 				if prediction {
 					true_positive += 1;

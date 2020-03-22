@@ -1,5 +1,6 @@
 mod expression_detector;
 mod face_detector;
+mod haar_like_feature;
 mod integral_image;
 mod decision_tree;
 
@@ -20,6 +21,7 @@ async fn main() {
 	debug!("Starting...");
 	
 	let fd: FaceDetector = serde_json::from_str(include_str!("../face_detector.json")).unwrap();
+	//let fd = FaceDetector::new();
 	
 	let cli_args = std::env::args();
 	
@@ -27,8 +29,8 @@ async fn main() {
 	
 	// Track the number of dropped frames.
 	let max_frame_time = 64;
-	let max_dropped_frames = 8;
-	let mut dropped_frames = 0;
+	let max_dropped_frames:u32 = 8;
+	let mut dropped_frames:u32 = 0;
 	let mut rolling_average_dropped_frames = 0.0;
 	
 	// Set up the camera capture thread.
@@ -106,8 +108,9 @@ async fn main() {
 		for f in faces {
 			let x_offset = screen_width() / 2.0 - texture.width() / 2.0;
 			let y_offset = screen_height() / 2.0 - texture.height() / 2.0;
-			let intensity = 8u8 + (240f32 * f.confidence * f.confidence) as u8;
-			draw_rectangle_lines(f.x as f32 + x_offset, f.y as f32 + y_offset, f.width as f32, f.height as f32, Color([0, 255, intensity, intensity]));
+			let intensity = 1u8 + (240f32 * f.confidence) as u8;
+			//draw_rectangle_lines(f.x as f32 + x_offset, f.y as f32 + y_offset, f.width as f32, f.height as f32, Color([0, 255, intensity, intensity]));
+			draw_rectangle(f.x as f32 + x_offset, f.y as f32 + y_offset, f.width as f32, f.height as f32, Color([0, 255, intensity, intensity]));
 		}
 		
 		// Count the number of frames we've done and drop them if we've taken too long.
