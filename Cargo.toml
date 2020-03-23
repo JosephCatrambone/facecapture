@@ -8,7 +8,7 @@ edition = "2018"
 
 [dependencies]
 camera_capture = "0.5.0"
-#image = "0.23.1" Camera capture uses a different version of image.
+image = "0.22"  # Camera_capture uses 0.22.  Keep this in lock-step.
 macroquad = "0.1.3"
 nalgebra = "0.20"
 #opencv = {version = "0.32", features = ["contrib", "buildtime-bindgen"]}

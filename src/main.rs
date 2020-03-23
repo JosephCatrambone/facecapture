@@ -4,21 +4,31 @@ mod haar_like_feature;
 mod integral_image;
 mod decision_tree;
 
+use face_detector::FaceDetector;
+
+use image::ImageBuffer;
 use macroquad::*;
 use macroquad::Image as MQImage;
 //use std::cmp::max;
 //use camera_capture::image::{ImageBuffer, Rgb, ConvertBuffer};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use face_detector::FaceDetector;
-
 const COLOR_CHANNELS:usize = 4;
+
+struct ApplicationState {
+
+}
 
 #[macroquad::main("Title!")]
 async fn main() {
 	debug!("Starting...");
+	
+	let application_state = Arc::<ApplicationState>::new(ApplicationState {
+	
+	});
 	
 	let fd: FaceDetector = serde_json::from_str(include_str!("../face_detector.json")).unwrap();
 	//let fd = FaceDetector::new();
@@ -109,8 +119,8 @@ async fn main() {
 			let x_offset = screen_width() / 2.0 - texture.width() / 2.0;
 			let y_offset = screen_height() / 2.0 - texture.height() / 2.0;
 			let intensity = 1u8 + (240f32 * f.confidence) as u8;
-			//draw_rectangle_lines(f.x as f32 + x_offset, f.y as f32 + y_offset, f.width as f32, f.height as f32, Color([0, 255, intensity, intensity]));
-			draw_rectangle(f.x as f32 + x_offset, f.y as f32 + y_offset, f.width as f32, f.height as f32, Color([0, 255, intensity, intensity]));
+			draw_rectangle_lines(f.x as f32 + x_offset + 2f32, f.y as f32 + y_offset + 2f32, f.width as f32 - 2f32, f.height as f32 - 2f32, Color([0, 255, intensity, intensity]));
+			//draw_rectangle(f.x as f32 + x_offset + 2f32, f.y as f32 + y_offset + 2f32, f.width as f32 - 2f32, f.height as f32 - 2f32, Color([0, 255, intensity, intensity]));
 		}
 		
 		// Count the number of frames we've done and drop them if we've taken too long.

@@ -2,55 +2,55 @@
 pub struct IntegralImage {
 	pub width: usize,
 	pub height: usize,
-	pub integral_data: Vec::<u32>
+	pub integral_data: Vec::<u32>,
 }
 
 impl IntegralImage {
 	pub fn new_from_image_data(width: usize, height: usize, pixel_data: &Vec<u8>) -> Self {
-		IntegralImage::new_from_image_data_subsampled(width, height, pixel_data, 1, 1)
+		IntegralImage::new_from_image_data_subsampled(width, height, pixel_data, width, height)
 	}
 	
-	pub fn new_from_image_data_subsampled(width: usize, height: usize, pixel_data: &Vec<u8>, x_step:usize, y_step:usize) -> Self {
+	pub fn new_from_image_data_subsampled(width: usize, height: usize, pixel_data: &Vec<u8>, target_width:usize, target_height:usize) -> Self {
 		assert_eq!(width*height, pixel_data.len());
-		let new_width = width/x_step;
-		let new_height = height/y_step;
-		let mut integral_data = vec![0u32; new_width*new_height];
-		for y in 0..new_height {
-			for x in 0..new_width {
+		let x_step = width/target_width;
+		let y_step = height/target_height;
+		let mut integral_data = vec![0u32; target_width*target_height];
+		for y in 0..target_height {
+			for x in 0..target_width {
 				let original_index = (x*x_step) + ((y*y_step)*width);
-				let new_index = x + y*new_width;
+				let new_index = x + y*target_width;
 				
 				if x > 0 {
 					integral_data[new_index] += integral_data[new_index-1];
 				}
 				if y > 0 {
-					integral_data[new_index] += integral_data[new_index-new_width];
+					integral_data[new_index] += integral_data[new_index-target_width];
 				}
 				if x > 0 && y > 0 {
-					integral_data[new_index] -= integral_data[(new_index-1)-new_width];
+					integral_data[new_index] -= integral_data[(new_index-1)-target_width];
 				}
 				integral_data[new_index] += pixel_data[original_index] as u32;
 			}
 		}
 		IntegralImage {
-			width:new_width,
-			height:new_height,
-			integral_data
+			width:target_width,
+			height:target_height,
+			integral_data,
 		}
 	}
 	
 	// THIS PERFORMS A COPY!  TODO: Make a 'view' method or something.
 	pub fn new_from_region(&self, x0:usize, y0:usize, x1:usize, y1:usize) -> Self {
-		let mut data = vec![0u32; (x1-x0)*(y1-y0)];
+		let mut integral_data = Vec::<u32>::with_capacity((x1-x0)*(y1-y0));
 		for y in y0..y1 {
 			for x in x0..x1 {
-				data.push(self.integral_data[x + y*self.width]);
+				integral_data.push(self.integral_data[x + y*self.width]);
 			}
 		}
 		IntegralImage {
 			width: x1-x0,
 			height: y1-y0,
-			integral_data: data
+			integral_data,
 		}
 	}
 	
