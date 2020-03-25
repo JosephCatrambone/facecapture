@@ -70,7 +70,7 @@ impl DecisionTree {
 		for candidate_feature in 0..examples[0].len() {
 			// TODO: Calculate midpoint.
 			let impurity = gini_impurity(examples, labels, candidate_feature, self.threshold);
-			if impurity < best_gini_impurity {
+			if impurity > 0f32 && impurity < best_gini_impurity {
 				best_gini_impurity = impurity;
 				best_feature = candidate_feature;
 			}
@@ -165,6 +165,7 @@ mod tests {
 		let examples = vec![&doom, &animal_crossing, &gta, &pokemon, &quake, &fez];
 		let labels = vec![false, true, false, true, false, true];
 		dt.train(&examples, &labels, 4);
+		
 		let wolfenstein = vec![1f32, 0f32, 1f32, 1f32];
 		let terraria = vec![0f32, 1f32, 0f32, 0f32];
 		assert!(!dt.predict(&wolfenstein));

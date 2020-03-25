@@ -47,7 +47,7 @@ async fn main() {
 	// Using sync channel instead of channel so we block when the buffer is full.
 	let (sender, receiver) = channel();
 
-	// Spawn off an expensive computation
+	// Spawn off an the camera reader.
 	let camera_thread = std::thread::spawn(move|| {
 		//sender.send(expensive_computation()).unwrap();
 		let cam_cap = camera_capture::create(0);
@@ -66,6 +66,7 @@ async fn main() {
 		let frame_iter = frame_iter.unwrap();
 		for f in frame_iter {
 			if sender.send(f).is_err() {
+				eprintln!("Failed to add image to framebuffer.");
 				break;
 			}
 		}
