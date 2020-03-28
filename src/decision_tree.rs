@@ -2,7 +2,7 @@
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DecisionTree {
 	feature: usize,
 	threshold: f32,
@@ -16,6 +16,10 @@ pub struct DecisionTree {
 impl DecisionTree {
 	pub fn new() -> Self {
 		DecisionTree { ..Default::default() }
+	}
+	
+	pub fn get_decision_feature(&self) -> usize {
+		self.feature
 	}
 	
 	pub fn predict(&self, example: &Vec<f32>) -> bool {
@@ -170,5 +174,19 @@ mod tests {
 		let terraria = vec![0f32, 1f32, 0f32, 0f32];
 		assert!(!dt.predict(&wolfenstein));
 		assert!(dt.predict(&terraria));
+	}
+	
+	#[test]
+	fn test_tree_sanity_2() {
+		let mut dt = DecisionTree::new();
+		// Factor B is the only one that should actually matter.
+		let a = vec![0f32, 0f32, 0f32];
+		let b = vec![0f32, 1f32, 0f32];
+		let c = vec![1f32, 0f32, 0f32];
+		let d = vec![1f32, 1f32, 0f32];
+		let examples = vec![&a, &b, &c, &d];
+		let labels = vec![false, true, false, true];
+		dt.train(&examples, &labels, 5);
+		assert_eq!(dt.get_decision_feature(), 1);
 	}
 }

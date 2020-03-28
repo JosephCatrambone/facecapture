@@ -9,12 +9,19 @@ use rand::distributions::Uniform;
 use rayon::prelude::*;
 use serde::{Serialize, Deserialize};
 use std::borrow::Borrow;
-use std::cmp::{max, min};
+use std::cmp::{max, min, Ordering};
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::str::FromStr;
 
+// 32x32 with 10k positive, 90k (noisy) negatives, 3 deep and 50% sample: TP 1773  FP 37438  TN 7298  FN 3099
+// 64x64 with 1k positive, (9k negatives), max_depth of 3 + 100 classifiers and 50% per-tree: TP 56  FP 553  TN 317  FN 48
+// 64x64 with 1k pos, 9k negative, max depth 2 + 100 classifiers and 50% per tree: TP 66  FP 575  TN 361  FN 37
+// 32x32 with 1k pos, 9k negative, max depth 2 + 100 classifiers and 50% per tree: TP 53  FP 548  TN 331  FN 46
+// 64X64 with 1k pos, 9k negative, max depth 5 + 50 classifiers and 80% per tree: TP 46  FP 485  TN 447  FN 47
+// 64x64 with 9k pos, 9k negative, max depth 5 + 50 classifiers and 50% per tree:
+// max depth 2 + 200 classifiers + 20% per tree: 0.50586087
 
 pub struct DetectedFace {
 	pub x: usize,
@@ -24,7 +31,7 @@ pub struct DetectedFace {
 	pub confidence: f32
 }
 
-const DETECTOR_SIZE:u32 = 32u32;
+const DETECTOR_SIZE:u32 = 64u32;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FaceDetector {
@@ -47,7 +54,9 @@ impl FaceDetector {
 		
 		//let img = IntegralImage::new_from_image_data(image_width, image_height, image_data);
 		
-		for scale in 6..11 { // 6 - 11 seems big enough
+		for scale in 5..10 { // 6 - 11 seems big enough
+			assert!(image_width/scale > DETECTOR_SIZE as usize);
+			assert!(image_height/scale > DETECTOR_SIZE as usize);
 			let img = IntegralImage::new_from_image_data_subsampled(image_width, image_height, image_data, image_width/scale, image_height/scale);
 			//fs::write(format!("sample_image_scale_{}_{}x{}.dat", scale, img.width, img.height), img.data);
 			for y in (0..img.height - DETECTOR_SIZE as usize).step_by(DETECTOR_SIZE as usize/3) {
@@ -56,9 +65,8 @@ impl FaceDetector {
 					//fs::write(format!("roi_scale_{}_x{}_y{}_{}x{}.dat", scale, x, y, img.width, img.height), roi.data);
 					//if !self.predict(&roi) { continue; }
 					//if self.predict(&roi) {
-					//if self.predict_early_out(&roi, Some(2), Some(4)) {
-					let p = self.probability(&roi);
-					if p > 0.6 {
+					if self.predict_early_out(&roi, Some(10), Some(40)) {
+						let p = self.probability(&roi);
 						let f = DetectedFace {
 							x: scale * x,
 							y: scale * y,
@@ -69,7 +77,6 @@ impl FaceDetector {
 						};
 						results.push(f);
 					}
-					//}
 				}
 			}
 		}
@@ -136,12 +143,14 @@ impl FaceDetector {
 	}
 	
 	pub fn train(&mut self, examples:Vec<&IntegralImage>, labels:Vec<bool>) {
+		let mut rng = thread_rng();
 		let mut examples = examples;
 		let mut labels = labels; // We do this seemingly arbitrary reassign to allow us to mutate these refs.
 		
 		// Constants.
+		let sample_rate_per_tree = 0.5f64;
 		let max_depth = 3;
-		let classifiers_to_keep:usize = 50; // Viola + Jones used 38, but they were smaller.
+		let classifiers_to_keep:usize = 200; // Viola + Jones used 38, but they were smaller.
 		
 		// Starting features -- these will be culled at the end.  There might be a _LOT_.
 		self.features = make_3x3_haar(DETECTOR_SIZE as usize, DETECTOR_SIZE as usize);
@@ -155,8 +164,10 @@ impl FaceDetector {
 			converted_examples.push(self.vectorize_example(example));
 		}
 		
-		let mut rng = thread_rng();
+		// Track our error rates for the final shuffle.
+		let mut false_negative_rates:Vec<u32> = vec![];
 		
+		// Make and train our new classifiers.
 		for _ in 0..classifiers_to_keep {
 			let mut d = DecisionTree::new();
 			
@@ -164,7 +175,7 @@ impl FaceDetector {
 			let mut x = vec![];
 			let mut y = vec![];
 			for (example, label) in converted_examples.iter().zip(&labels) {
-				if rng.gen_bool(0.8) {
+				if rng.gen_bool(sample_rate_per_tree) {
 					x.push(example);
 					y.push(*label);
 				}
@@ -174,19 +185,28 @@ impl FaceDetector {
 			d.train(&x, &y, max_depth);
 			
 			// Now use the classifier to classify all examples.
+			let mut false_negative_rate:u32 = 0;
 			let mut errors = 0;
 			let mut weight_update_directions = vec![]; // Track the items we got wrong so we can reweight them in the next step.
 			for (x, y) in converted_examples.iter().zip(&labels) {
-				if d.predict(x) != *y {
+				let prediction = d.predict(x);
+				if prediction != *y {
 					errors += 1;
 					weight_update_directions.push(1);
 				} else {
 					weight_update_directions.push(-1);
 				}
+				
+				if prediction == false && *y == true {
+					false_negative_rate += 1;
+				}
 			}
 			
 			// Store D.
 			self.classifiers.push(d);
+			
+			// Store the error rate.
+			false_negative_rates.push(false_negative_rate);
 			
 			// Amount of say = 0.5 * log ((1-error)/error)
 			// If error is HUUUGE this number will be a large NEGATIVE number.
@@ -229,7 +249,37 @@ impl FaceDetector {
 			labels = new_labels;
 		}
 		
-		// TODO: Compact features.  Pick the elements that are not used by any of the trees and delete them to save space.
+		// Sort by false negative rate, lowest first.
+		let mut indices:Vec<usize> = (0..(&self.classifiers).len()).collect();
+		indices.sort_by(|a, b| {
+			// Sort by the performance of the classifier.
+			false_negative_rates[*a].cmp(&false_negative_rates[*b])
+		});
+		let (new_classifiers, new_weights) = indices.iter().map(|i|{ (self.classifiers[*i].clone(), self.weights[*i]) }).unzip();
+		self.classifiers = new_classifiers;
+		self.weights = new_weights;
+		
+		// Compact features.  Pick the elements that are not used by any of the trees and delete them to save space.
+		/*
+		let mut feature_use_count = vec![0u32; self.features.len()]; // Deliberate choice -- we will probably be popping the zeros and don't want to re-update the indices.
+		for c in &self.classifiers {
+			feature_use_count[c.get_decision_feature()] += 1;
+		}
+		let mut feature_indices_to_drop = vec![];
+		for (feature_index, count) in feature_use_count.iter().enumerate() {
+			if *count == 0 {
+				feature_indices_to_drop.push(feature_index);
+			}
+		}
+		for index in feature_indices_to_drop {
+			self.features.remove(index);
+			for c in &self.classifiers {
+				if c.get_decision_feature() > index {
+					// Reduce c's index by one.
+				}
+			}
+		}
+		*/
 	}
 }
 
@@ -239,12 +289,13 @@ mod tests {
 	use super::*;
 	use std::fs::File;
 	use std::io::prelude::*;
+	use std::io::BufWriter;
 	
 	#[test]
 	#[ignore] // Run with cargo test -- --ignored
 	fn test_train_face_classifier() {
-		let num_positive_examples = 5000;
-		let num_negative_examples = 30000;
+		let num_positive_examples = 10000;
+		let num_negative_examples = 100000; // Only up to 10k are validated. 2k are thoroughly validated.
 		let mut rng = thread_rng();
 		
 		// Allocate buffers.
@@ -281,7 +332,7 @@ mod tests {
 		// Split training and test.
 		println!("Splitting data.");
 		for i in 0..examples.len() {
-			if rng.gen_bool(0.5) {
+			if rng.gen_bool(0.85) {
 				train_x.push(&examples[i]);
 				train_y.push(labels[i]);
 			} else {
@@ -294,33 +345,52 @@ mod tests {
 		let mut face_detector = FaceDetector::new();
 		face_detector.train(train_x, train_y);
 		
-		println!("Testing classifiers.");
-		let mut true_positive = 0;
-		let mut false_positive = 0;
-		let mut true_negative = 0;
-		let mut false_negative = 0;
-		
-		for (x, y) in test_x.iter().zip(&test_y) {
-			let prediction = face_detector.predict(x);
-			let proba = face_detector.probability(x);
-			println!("Truth: {}  Prediction: {}  Probability: {}", *y, prediction, proba);
-			if *y {
-				if prediction {
-					true_positive += 1;
-				} else {
-					false_negative += 1;
-				}
-			} else {
-				if prediction {
-					false_positive += 1;
-				} else {
-					true_negative += 1;
-				}
-			}
-		}
-		
-		println!("TP {}  FP {}  TN {}  FN {}", true_positive, false_positive, true_negative, false_negative);
+		println!("Saving...");
 		let mut fout = File::create("face_detector.json").unwrap();
 		fout.write(serde_json::to_string::<FaceDetector>(&face_detector).unwrap().as_bytes());
+		
+		println!("Evaluating...");
+		let mut probabilities = vec![];
+		for x in test_x {
+			//let prediction = face_detector.predict(x);
+			let proba = face_detector.probability(x);
+			probabilities.push(proba);
+		}
+		
+		println!("Testing classifiers.");
+		let mut auc = 0.0f32;
+		let mut result_csv = File::create("result.csv").unwrap();
+		write!(result_csv, "threshold,TPR_tp_over_tp_plus_fn,FPR_fp_over_fp_plus_tn\n");
+		for threshold in (0..100) {
+			let mut true_positive = 0;
+			let mut false_positive = 0;
+			let mut true_negative = 0;
+			let mut false_negative = 0;
+			
+			// TP rate on Y.  FP rate on X.
+			for (p, y) in probabilities.iter().zip(&test_y) {
+				let prediction = *p > (threshold as f32/100f32);
+				if *y {
+					if prediction {
+						true_positive += 1;
+					} else {
+						false_negative += 1;
+					}
+				} else {
+					if prediction {
+						false_positive += 1;
+					} else {
+						true_negative += 1;
+					}
+				}
+			}
+
+			let tpr = true_positive as f32 / (true_positive + false_negative) as f32;
+			let fpr = false_positive as f32 / (false_positive + true_negative) as f32;
+			auc += tpr;
+			write!(result_csv, "{},{},{}\n", threshold, tpr, fpr);
+			println!("{}\tTP:{} FP:{}  TN:{} FN:{}", threshold, true_positive, false_positive, true_negative, false_negative);
+		}
+		println!("{}", (auc/100f32));
 	}
 }
