@@ -7,11 +7,17 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-camera_capture = "0.5.0"
-image = "0.22"  # Camera_capture uses 0.22.  Keep this in lock-step.
-macroquad = "0.1.3"
+#camera_capture = "0.5.0"  # Use image from here.
+camera_capture = { path = "camera_capture" }
+#fltk = "^0.3.7" # A good option.  Considering as a fallback.
+fltk = { git = "https://github.com/MoAlyousef/fltk-rs" }
+#coffee = { version = "0.3", features = ["opengl"] } # vulkan, metal, dx11  // A maybe.
+image = "0.23.4"  # Camera_capture uses it, too.  Keep this in lock-step.
+#macroquad = "0.1"
+#macroquad = { git = "https://github.com/josephcatrambone/macroquad" }
 nalgebra = "0.20"
-#opencv = {version = "0.32", features = ["contrib", "buildtime-bindgen"]}
+#opencv = { path = "opencv-rust", features = ["opencv-4", "contrib", "buildtime-bindgen"]}
+#opencv = { version = "0.34", features = ["opencv-4", "contrib", "buildtime-bindgen"]}
 rand = "0.7.3"
 rayon = "1.1"
 serde = { version = "1.0.105", features = ["derive"] }

@@ -2,7 +2,6 @@
 use crate::decision_tree::DecisionTree;
 use crate::haar_like_feature::{HaarFeature, make_3x3_haar, make_2x2_haar};
 use crate::integral_image::IntegralImage;
-use crate::MQImage;
 
 use rand::{thread_rng, Rng};
 use rand::distributions::Uniform;
