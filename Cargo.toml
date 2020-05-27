@@ -10,15 +10,19 @@ edition = "2018"
 #camera_capture = "0.5.0"  # Use image from here.
 camera_capture = { path = "camera_capture" }
 #fltk = "^0.3.7" # A good option.  Considering as a fallback.
-fltk = { git = "https://github.com/MoAlyousef/fltk-rs" }
+#fltk = { git = "https://github.com/MoAlyousef/fltk-rs" }
 #coffee = { version = "0.3", features = ["opengl"] } # vulkan, metal, dx11  // A maybe.
 image = "0.23.4"  # Camera_capture uses it, too.  Keep this in lock-step.
-#macroquad = "0.1"
-#macroquad = { git = "https://github.com/josephcatrambone/macroquad" }
+#macroquad = "*"
+macroquad = { git = "https://github.com/not-fl3/macroquad" }
+megaui = { git = "https://github.com/not-fl3/megaui" }
+#miniquad = { version = "0.2.53" }
 nalgebra = "0.20"
 #opencv = { path = "opencv-rust", features = ["opencv-4", "contrib", "buildtime-bindgen"]}
 #opencv = { version = "0.34", features = ["opencv-4", "contrib", "buildtime-bindgen"]}
+quad-gl = "0.2.1"
 rand = "0.7.3"
 rayon = "1.1"
 serde = { version = "1.0.105", features = ["derive"] }
 serde_json = "1.0"
+tch = "0.1.7"
