@@ -30,7 +30,7 @@ pub struct DetectedFace {
 	pub confidence: f32
 }
 
-const DETECTOR_SIZE:u32 = 64u32;
+const DETECTOR_SIZE:u32 = 48u32;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FaceDetector {
@@ -225,7 +225,7 @@ impl FaceDetector {
 				total_sample_weights += new_sample_weight;  // Accumulate for norm.
 			}
 			// Normalize:
-			sample_weights.iter_mut().map(|w|{ *w /= total_sample_weights });
+			sample_weights.iter_mut().for_each(|w|{ *w /= total_sample_weights });
 			
 			// Using the new sample weights, construct a new training set.
 			let mut new_examples = vec![];
