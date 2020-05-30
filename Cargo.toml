@@ -14,8 +14,7 @@ camera_capture = { path = "camera_capture" }
 #coffee = { version = "0.3", features = ["opengl"] } # vulkan, metal, dx11  // A maybe.
 image = "0.23.4"  # Camera_capture uses it, too.  Keep this in lock-step.
 #macroquad = "*"
-macroquad = { git = "https://github.com/not-fl3/macroquad" }
-megaui = { git = "https://github.com/not-fl3/megaui" }
+macroquad = "0.2.0-alpha.7" # { git = "https://github.com/not-fl3/macroquad" }
 #miniquad = { version = "0.2.53" }
 nalgebra = "0.20"
 #opencv = { path = "opencv-rust", features = ["opencv-4", "contrib", "buildtime-bindgen"]}
