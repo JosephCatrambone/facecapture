@@ -85,27 +85,6 @@ async fn main() {
 		// Draw frame to screen.
 		draw_capture_frame(&mut application_state);
 		
-		// Draw the ROI setup.
-		mq::draw_window(
-			ROI_WINDOW_ID,
-			mq::vec2(10f32, 10f32),
-			mq::vec2(400f32, 400f32),
-			mq::WindowParams {
-				..Default::default()
-			},
-			|ui| {
-				// ui.tree_node
-				application_state.new_expression_name.clear();
-				ui.slider(ROI_WINDOW_LEFT_ID, "ROI LEFT", 0f32..application_state.camera_resolution.0 as f32, &mut roi_left);
-				ui.slider(ROI_WINDOW_TOP_ID, "ROI TOP", 0f32..application_state.camera_resolution.1 as f32, &mut roi_top);
-				ui.slider(ROI_WINDOW_RIGHT_ID, "ROI RIGHT", roi_left..application_state.camera_resolution.0 as f32, &mut roi_right);
-				ui.slider(ROI_WINDOW_BOTTOM_ID, "ROI BOTTOM", roi_top..application_state.camera_resolution.1 as f32, &mut roi_bottom);
-				application_state.focus_area = (roi_left as u32, roi_top as u32, (roi_right-roi_left) as u32, (roi_bottom-roi_top) as u32);
-				ui.separator();
-				ui.slider(ROI_WINDOW_DARKEN_ID, "Shade ROI", 0f32..1f32, &mut application_state.darken_roi);
-			}
-		);
-		
 		// Draw expression magnitudes and offer new captures.
 		mq::draw_window(
 			EXPRESSION_WINDOW_ID,
@@ -118,12 +97,30 @@ async fn main() {
 			|ui| {
 				if !application_state.recording {
 					ui.input_field(EXPRESSION_WINDOW_NAME_TEXT_ID, "", &mut application_state.new_expression_name);
-					if ui.button(None, "+ Add Expression") {
-						capture_expression(&mut application_state);
-						application_state.new_expression_name.clear();
-					}
+					if ui.button(None, "+ Add Expression") { capture_expression(&mut application_state); }
 					ui.separator();
 				}
+			}
+		);
+		
+		// Draw the ROI setup.
+		mq::draw_window(
+			ROI_WINDOW_ID,
+			mq::vec2(10f32, 10f32),
+			mq::vec2(400f32, 400f32),
+			mq::WindowParams {
+				label: "Face Area".to_string(),
+				..Default::default()
+			},
+			|ui| {
+				// ui.tree_node
+				ui.slider(ROI_WINDOW_LEFT_ID, "ROI LEFT", 0f32..application_state.camera_resolution.0 as f32, &mut roi_left);
+				ui.slider(ROI_WINDOW_TOP_ID, "ROI TOP", 0f32..application_state.camera_resolution.1 as f32, &mut roi_top);
+				ui.slider(ROI_WINDOW_RIGHT_ID, "ROI RIGHT", roi_left..application_state.camera_resolution.0 as f32, &mut roi_right);
+				ui.slider(ROI_WINDOW_BOTTOM_ID, "ROI BOTTOM", roi_top..application_state.camera_resolution.1 as f32, &mut roi_bottom);
+				application_state.focus_area = (roi_left as u32, roi_top as u32, (roi_right-roi_left) as u32, (roi_bottom-roi_top) as u32);
+				ui.separator();
+				ui.slider(ROI_WINDOW_DARKEN_ID, "Shade ROI", 0f32..1f32, &mut application_state.darken_roi);
 			}
 		);
 		
@@ -333,7 +330,7 @@ fn setup_expression(application_state:&mut ApplicationState) {
 }
 
 fn capture_expression(application_state: &mut ApplicationState) {
-	//let new_expr_name = application_state.new_expression_name.clone();
+	let new_expr_name = application_state.new_expression_name.clone();
 	
-	//application_state.new_expression_name.clear();
+	application_state.new_expression_name.clear();
 }
