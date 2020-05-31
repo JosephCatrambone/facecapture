@@ -18,6 +18,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::exit;
 
 const COLOR_CHANNELS:usize = 4;
 const FONT_SIZE:f32 = 12f32;
@@ -97,8 +98,28 @@ async fn main() {
 			|ui| {
 				if !application_state.recording {
 					ui.input_field(EXPRESSION_WINDOW_NAME_TEXT_ID, "", &mut application_state.new_expression_name);
-					if ui.button(None, "+ Add Expression") { capture_expression(&mut application_state); }
+					if ui.button(None, "+ Add Expression") {
+						application_state.expression_detector.add_expression(
+							application_state.bw_image_source.width as u32,
+							application_state.bw_image_source.height as u32,
+							&application_state.bw_image_source.bytes,
+							application_state.focus_area,
+							application_state.new_expression_name.clone()
+						);
+						application_state.new_expression_name.clear();
+					}
 					ui.separator();
+					if application_state.expression_detector.get_expression_count() > 0 {
+						let expr_weights = application_state.expression_detector.get_expression_weights(
+							application_state.bw_image_source.width as u32,
+							application_state.bw_image_source.height as u32,
+							&application_state.bw_image_source.bytes,
+							application_state.focus_area,
+						);
+						expr_weights.iter().for_each(|(name, value)| {
+							ui.label(None, ("|".repeat((100f32 * value) as usize) + name).as_ref());
+						});
+					}
 				}
 			}
 		);
@@ -250,7 +271,7 @@ fn init_application(camera_resolution:(usize, usize)) -> ApplicationState {
 	
 	ApplicationState {
 		camera_resolution: (camera_resolution.0 as u32, camera_resolution.1 as u32),
-		focus_area: (0, 0, 0, 0),
+		focus_area: (0, 0, camera_resolution.0 as u32, camera_resolution.1 as u32),
 		bw_image_source: bw_image,
 		cpu_image_buffer: image,
 		gpu_image: texture,
@@ -262,75 +283,5 @@ fn init_application(camera_resolution:(usize, usize)) -> ApplicationState {
 	}
 }
 
-fn preview(application_state:&mut ApplicationState) {
-	// Draw the frame
-	let texture = application_state.gpu_image;
-	let x_offset = mq::screen_width() / 2.0 - texture.width() / 2.0;
-	let y_offset = mq::screen_height() / 2.0 - texture.height() / 2.0;
-	mq::draw_texture(texture, x_offset, y_offset, mq::WHITE);
-	
-	mq::draw_text("PREVIEW MODE -- [W]: Setup Camera  [E]: Setup Expresion  [R]: Record", 10f32, mq::screen_height()-16f32, FONT_SIZE, mq::Color([255, 255, 255, 255]));
-}
-
-fn setup_camera(application_state:&mut ApplicationState) {
-	// Draw the frame
-	let texture = application_state.gpu_image;
-	let x_offset = mq::screen_width() / 2.0 - texture.width() / 2.0;
-	let y_offset = mq::screen_height() / 2.0 - texture.height() / 2.0;
-	mq::draw_texture(texture, x_offset, y_offset, mq::WHITE);
-	
-	// Draw some dark boundaries around the image's ROI.
-	// Rather than draw a rectangle directly we draw dark areas _around_ the region of interest.
-	let shade_color = mq::Color([0, 0, 0, 100]);
-	let roi_x = application_state.focus_area.0 as f32 + x_offset;
-	let roi_y = application_state.focus_area.1 as f32 + y_offset;
-	let roi_w = application_state.focus_area.2 as f32;
-	let roi_h = application_state.focus_area.3 as f32;
-	mq::draw_rectangle(0f32, 0f32, mq::screen_width(), roi_y, shade_color); // Top
-	mq::draw_rectangle(0f32, 0f32, roi_x, mq::screen_height(), shade_color); // Left boundary
-	mq::draw_rectangle(roi_x + roi_w, 0f32, (mq::screen_width() - roi_w), mq::screen_height(), shade_color); // Right shade
-	mq::draw_rectangle(0f32, roi_y + roi_h, mq::screen_width(), (mq::screen_height() - roi_h), shade_color); // Bottom shade
-	
-	// Show help text.
-	mq::draw_text("Setting ROI.  [LEFT MOUSE]: Top Left.  [RIGHT MOUSE]: Bottom Right.  [ESCAPE]: Back.", 16f32, mq::screen_height()-24f32, FONT_SIZE, mq::Color([255, 255, 255, 255]));
-	
-	// Maybe update our shaded area.
-	if mq:: is_mouse_button_down(mq::MouseButton::Left) || mq::is_mouse_button_down(mq::MouseButton::Right) {
-		let (x,y) = mq::mouse_position(); // X and Y are in terms of the screen size.  Remove the offset of the drawing before making them our ROI.
-		let x = (x - x_offset) as u32;
-		let y = (y - y_offset) as u32;
-		
-		if mq::is_mouse_button_down(mq::MouseButton::Left) {
-			application_state.focus_area = (x, y, application_state.focus_area.2, application_state.focus_area.3);
-		} else if mq::is_mouse_button_down(mq::MouseButton::Right) {
-			application_state.focus_area = (application_state.focus_area.0, application_state.focus_area.1, x - application_state.focus_area.0, y - application_state.focus_area.1);
-		}
-	}
-}
-
-fn setup_expression(application_state:&mut ApplicationState) {
-	// Draw the frame
-	let texture = application_state.gpu_image;
-	let x_offset = 10f32;
-	let y_offset = 10f32;
-	mq::draw_texture_rec(texture, x_offset, y_offset, application_state.focus_area.2 as f32, application_state.focus_area.3 as f32, application_state.focus_area.0 as f32, application_state.focus_area.1 as f32, application_state.focus_area.2 as f32, application_state.focus_area.3 as f32, mq::WHITE);
-	
-	// Show help text.
-	mq::draw_text("[A] Add Expression, [S] Add Sample, [D] Delete Expression", 16f32, mq::screen_height()-24f32, FONT_SIZE, mq::Color([255, 255, 255, 255]));
-	
-	// Draw all the expressions.
-	
-	
-	// Check for clicks on the mouse.
-	
-	// Check keyboard input.
-	if mq::is_key_down(mq::KeyCode::Escape) {
-		application_state.recording = false;
-	}
-}
-
-fn capture_expression(application_state: &mut ApplicationState) {
-	let new_expr_name = application_state.new_expression_name.clone();
-	
-	application_state.new_expression_name.clear();
-}
+//if mq::is_mouse_button_down(mq::MouseButton::Left) || mq::is_mouse_button_down(mq::MouseButton::Right) {
+//let (x,y) = mq::mouse_position(); // X and Y are in terms of the screen size.  Remove the offset of the drawing before making them our ROI.
