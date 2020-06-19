@@ -1,11 +1,12 @@
 
-use std::io::Cursor;
+use std::io;
+use std::io::prelude::*;
+use std::io::Read;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tract_core;
-use tract_ndarray;
-use tract_onnx;
-use tract_onnx::prelude::*;
+use tch;
+use tch::nn::ModuleT;
+use std::borrow::BorrowMut;
 
 // Keep these compatible with the expression detector.
 const LATENT_SIZE:usize = 1024;
@@ -19,7 +20,8 @@ struct Expression {
 }
 
 pub struct ExpressionDetector {
-	model: SimplePlan<tract_core::model::fact::TypedFact, Box<dyn tract_core::ops::TypedOp>, tract_core::model::model::ModelImpl<tract_core::model::fact::TypedFact, std::boxed::Box<dyn tract_core::ops::TypedOp>>>,
+	model: tch::CModule,
+	model_store: tch::nn::VarStore,
 	expressions: Vec<Expression>,
 	//face_profile: DMatrix<f32>,
 	// low-dim = sigma_inv * U_trans * q
@@ -27,16 +29,21 @@ pub struct ExpressionDetector {
 
 impl ExpressionDetector {
 	pub fn new() -> Self {
-		let mut static_model_data = include_bytes!("../ml/expression_detector_cpu.onnx");
-		let mut cursor = Cursor::new(static_model_data);
-		let m = onnx()
-			.model_for_read(&mut cursor).unwrap()
-			.with_input_fact(0, InferenceFact::dt_shape(f32::datum_type(), tvec!(1, 1, DETECTOR_HEIGHT, DETECTOR_WIDTH))).unwrap()
-			.into_optimized().unwrap()
-			.into_runnable().unwrap();
+		let mut static_model_data:Vec<u8> = include_bytes!("../ml/expression_detector_cexport_cpu.pt").to_vec();
+		let m = match tch::CModule::load_data::<&[u8]>(&mut static_model_data.as_slice()) {
+			Ok(model) => model,
+			Err(e) => {
+				dbg!(e);
+				panic!("Goddamnit.");
+			}
+		};
+		
+		//let m = tch::CModule::load("./ml/expression_detector_cpu.onnx").unwrap();
+		let vs = tch::nn::VarStore::new(tch::Device::Cpu);
 		
 		ExpressionDetector {
 			model: m,
+			model_store: vs,
 			expressions: vec![]
 		}
 	}
@@ -46,7 +53,8 @@ impl ExpressionDetector {
 		let mut face = image_and_roi_to_tensor(image_width, image_height, image_data, roi);
 		
 		// Calculate embedding.
-		let embedding = (self.model.run(tvec!(face)) as TractResult<()>).unwrap()[0].to_array_view::<f32>().unwrap();
+		let tensor: tch::Tensor = self.model.forward_t(&face, false);
+		let embedding = (0..LATENT_SIZE).into_iter().map(|i| { tensor.double_value(&[0, i as i64]) as f32}).collect();
 		
 		// Insert a new expression.
 		self.expressions.push(Expression{
@@ -75,10 +83,11 @@ impl ExpressionDetector {
 		let mut face = image_and_roi_to_tensor(image_width, image_height, image_data, roi);
 		
 		// Embed the extracted face:
-		let embedding = (self.model.run(tvec!(face)) as TractResult<()>).unwrap()[0].to_array_view::<f32>().unwrap();
+		let tensor: tch::Tensor = self.model.forward_t(&face, false);
+		let embedding:Vec<f32> = (0..LATENT_SIZE).into_iter().map(|i| { tensor.double_value(&[0, i as i64]) as f32}).collect();
 		let mut embedding_magnitude = 0f32;
 		for i in 0..LATENT_SIZE {
-			embedding_magnitude += (embedding[i]*embedding[i]) as f32;
+			embedding_magnitude += (embedding[i]*embedding[i]);
 		}
 		
 		// Calc cosine product with all expressions.
@@ -119,12 +128,8 @@ fn image_and_roi_to_vec(image_width:u32, image_height:u32, image_data:&Vec<u8>, 
 }
 
 // Given a source image of the form w,h,data and an roi with (x, y, w, h), extract a tensor.
-fn image_and_roi_to_tensor(image_width:u32, _image_height:u32, image_data:&Vec<u8>, roi:(u32, u32, u32, u32)) -> Tensor {
-	let x_to_src = roi.2 as f32 / DETECTOR_WIDTH as f32;
-	let y_to_src = roi.3 as f32 / DETECTOR_HEIGHT as f32;
-	tract_ndarray::Array4::from_shape_fn((1, 1, DETECTOR_HEIGHT, DETECTOR_WIDTH), |(_b, c, y, x)| {
-		let src_x = (x as f32 * x_to_src) as usize + roi.0 as usize;
-		let src_y = (y as f32 * y_to_src) as usize + roi.1 as usize;
-		image_data[src_x + src_y*image_width as usize] as f32 / 255.0f32
-	}).into()
+fn image_and_roi_to_tensor(image_width:u32, _image_height:u32, image_data:&Vec<u8>, roi:(u32, u32, u32, u32)) -> tch::Tensor {
+	//let mut result = tch::Tensor::zeros(&[1, 1, DETECTOR_HEIGHT, DETECTOR_WIDTH], (tch::Kind::Float, tch::Device::Cpu));
+	let data:Vec<f32> = image_and_roi_to_vec(image_width, _image_height, image_data, roi).iter().map(|f|{ *f as f32 / 255.0f32 }).collect();
+	tch::Tensor::of_slice(data.as_slice()).view([1i64, 1i64, DETECTOR_HEIGHT as i64, DETECTOR_WIDTH as i64])
 }

@@ -116,8 +116,11 @@ async fn main() {
 							&application_state.bw_image_source.bytes,
 							application_state.focus_area,
 						);
+						// Sort the names so we always index them in order.
+						
 						expr_weights.iter().for_each(|(name, value)| {
-							ui.label(None, ("|".repeat((100f32 * value) as usize) + name).as_ref());
+							print!("{}: {}\n", name, value);
+							ui.label(None, (name.clone() + ": " + "[]".repeat((100f32 * value) as usize).as_str()).as_ref());
 						});
 					}
 				}
@@ -144,6 +147,9 @@ async fn main() {
 				ui.slider(ROI_WINDOW_DARKEN_ID, "Shade ROI", 0f32..1f32, &mut application_state.darken_roi);
 			}
 		);
+		// A little cleanup after the slider here:
+		roi_bottom = roi_bottom.max(roi_top);
+		roi_right = roi_right.max(roi_left);
 		
 		// Draw detected faces.
 		/*
