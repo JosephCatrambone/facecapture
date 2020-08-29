@@ -1,6 +1,5 @@
 
 use crate::decision_tree::DecisionTree;
-use crate::haar_like_feature::{HaarFeature, make_3x3_haar, make_2x2_haar, make_random_haar};
 
 use image::{GenericImage, GenericImageView, GrayImage};
 use rand::{thread_rng, Rng};
