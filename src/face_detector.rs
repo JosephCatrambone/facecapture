@@ -18,6 +18,7 @@ use std::str::FromStr;
 // 64x64 with 9k pos, 9k negative, max depth 5 + 50 classifiers and 50% per tree:
 // max depth 2 + 200 classifiers + 20% per tree: 0.50586087
 // Swapping from early-out trunk forest to random forest...
+// 64x64 with 10k pos, 10k negative, max depth 3, 50 classifiers and 50% per tree. Really good spread.  0.8333269 with TP scaling nicely.
 
 pub struct DetectedFace {
 	pub x: usize,
@@ -27,7 +28,7 @@ pub struct DetectedFace {
 	pub confidence: f32
 }
 
-const DETECTOR_SIZE:u32 = 48u32;
+const DETECTOR_SIZE:u32 = 64u32;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FaceDetector {
@@ -42,29 +43,23 @@ impl FaceDetector {
 			weights: vec![],
 		}
 	}
-	
-	pub fn detect_face(&self, image_width: usize, image_height: usize, image_data: &Vec<u8>) -> Vec::<DetectedFace> {
+
+	fn detect_faces(&self, image_width: usize, image_height: usize, image_data: &Vec<u8>) -> (usize, Vec::<DetectedFace>) {
 		let mut results = vec![];
 
 		let base_img = GrayImage::from_raw(image_width as u32, image_height as u32, image_data.clone()).expect("Failed to convert byte array to u8 grey image.");
-		
-		//let img = IntegralImage::new_from_image_data(image_width, image_height, image_data);
-		
-		for scale in 5..10 { // 6 - 11 seems big enough
+		let mut max_response_confidence = 0.0;
+		let mut max_response_index = 0;
+
+		for scale in 3..7 { // 6 - 11 seems big enough
 			assert!(image_width/scale > DETECTOR_SIZE as usize);
 			assert!(image_height/scale > DETECTOR_SIZE as usize);
 			let img = image::imageops::resize(&base_img, (image_width / scale) as u32, (image_height / scale) as u32, image::imageops::FilterType::Nearest);
-			//fs::write(format!("sample_image_scale_{}_{}x{}.dat", scale, img.width, img.height), img.data);
 			for y in (0..img.height() - DETECTOR_SIZE).step_by(DETECTOR_SIZE as usize/3) {
 				for x in (0..img.width() - DETECTOR_SIZE).step_by(DETECTOR_SIZE as usize/3) {
-					//let roi = image::imageops::crop_imm(&img, x, y, DETECTOR_SIZE, DETECTOR_SIZE);
 					let roi = img.view(x, y, DETECTOR_SIZE, DETECTOR_SIZE).to_image();
-					//fs::write(format!("roi_scale_{}_x{}_y{}_{}x{}.dat", scale, x, y, img.width, img.height), roi.data);
-					//if !self.predict(&roi) { continue; }
-					//if self.predict(&roi) {
-					//if self.predict_early_out(&roi, Some(3), Some(40)) {
 					let p = self.probability(&roi);
-					if p > 0.4f32 {
+					if p > 0.2f32 {
 						let f = DetectedFace {
 							x: scale * (x as usize),
 							y: scale * (y as usize),
@@ -73,14 +68,28 @@ impl FaceDetector {
 							//confidence: 0.0f32.max( p)
 							confidence: p
 						};
+						if p > max_response_confidence {
+							max_response_index = results.len();
+							max_response_confidence = p;
+						}
 						results.push(f);
 					}
 				}
 			}
 		}
 		//panic!("At the disco");
-		
-		results
+
+		(max_response_index, results)
+	}
+
+	pub fn detect_all_faces(&self, image_width: usize, image_height: usize, image_data: &Vec<u8>) -> Vec::<DetectedFace> {
+		let (_, faces) = self.detect_faces(image_width, image_height, image_data);
+		faces
+	}
+
+	pub fn detect_face(&self, image_width: usize, image_height: usize, image_data: &Vec<u8>) -> DetectedFace {
+		let (idx, mut faces) = self.detect_faces(image_width, image_height, image_data);
+		faces.remove(idx)
 	}
 	
 	pub fn probability<T : GenericImageView<Pixel=image::Luma<u8>>>(&self, example:&T) -> f32 {
@@ -113,7 +122,7 @@ impl FaceDetector {
 		
 		// Constants.
 		let sample_rate_per_tree = 0.5f64;
-		let max_depth = 5;
+		let max_depth = 3;
 		let classifiers_to_keep:usize = 50;
 
 		self.classifiers.clear();
