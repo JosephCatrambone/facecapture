@@ -85,6 +85,17 @@ async fn main() {
 		
 		// Draw frame to screen.
 		draw_capture_frame(&mut application_state);
+
+		// Automatically determine the ROI from our face detector.
+		// Draw detected faces.
+		let faces = fd.detect_face(camera_resolution.0, camera_resolution.1, &application_state.bw_image_source.bytes);
+		for f in &[faces] {
+			let x_offset = mq::screen_width() / 2.0 - application_state.gpu_image.width() / 2.0;
+			let y_offset = mq::screen_height() / 2.0 - application_state.gpu_image.height() / 2.0;
+			let intensity = 1u8 + (240f32 * f.confidence) as u8;
+			mq::draw_rectangle_lines(f.x as f32 + x_offset + 2f32, f.y as f32 + y_offset + 2f32, f.width as f32 - 2f32, f.height as f32 - 2f32, 1.0f32, mq::Color([0, 255, intensity, intensity]));
+			//draw_rectangle(f.x as f32 + x_offset + 2f32, f.y as f32 + y_offset + 2f32, f.width as f32 - 2f32, f.height as f32 - 2f32, Color([0, 255, intensity, intensity]));
+		}
 		
 		// Draw expression magnitudes and offer new captures.
 		mq::draw_window(
@@ -128,6 +139,7 @@ async fn main() {
 		);
 		
 		// Draw the ROI setup.
+		/*
 		mq::draw_window(
 			ROI_WINDOW_ID,
 			mq::vec2(10f32, 10f32),
@@ -150,19 +162,8 @@ async fn main() {
 		// A little cleanup after the slider here:
 		roi_bottom = roi_bottom.max(roi_top);
 		roi_right = roi_right.max(roi_left);
-		
-		// Draw detected faces.
-		/*
-		let faces = fd.detect_face(camera_resolution.0, camera_resolution.1, &application_state.bw_image_source.bytes);
-		for f in faces {
-			let x_offset = screen_width() / 2.0 - application_state.gpu_image.width() / 2.0;
-			let y_offset = screen_height() / 2.0 - application_state.gpu_image.height() / 2.0;
-			let intensity = 1u8 + (240f32 * f.confidence) as u8;
-			draw_rectangle_lines(f.x as f32 + x_offset + 2f32, f.y as f32 + y_offset + 2f32, f.width as f32 - 2f32, f.height as f32 - 2f32, 1.0f32, Color([0, 255, intensity, intensity]));
-			//draw_rectangle(f.x as f32 + x_offset + 2f32, f.y as f32 + y_offset + 2f32, f.width as f32 - 2f32, f.height as f32 - 2f32, Color([0, 255, intensity, intensity]));
-		}
 		 */
-		
+
 		// Count the number of frames we've done and drop them if we've taken too long.
 		let frame_time = frame_start_time.elapsed();
 		if let Ok(dt) = frame_time {
