@@ -1,8 +1,8 @@
 
 use crate::decision_tree::DecisionTree;
-use crate::haar_like_feature::{HaarFeature, make_3x3_haar, make_2x2_haar};
-use crate::integral_image::IntegralImage;
+use crate::haar_like_feature::{HaarFeature, make_3x3_haar, make_2x2_haar, make_random_haar};
 
+use image::{GenericImage, GenericImageView, GrayImage};
 use rand::{thread_rng, Rng};
 use rand::distributions::Uniform;
 use rayon::prelude::*;
@@ -18,6 +18,7 @@ use std::str::FromStr;
 // 64X64 with 1k pos, 9k negative, max depth 5 + 50 classifiers and 80% per tree: TP 46  FP 485  TN 447  FN 47
 // 64x64 with 9k pos, 9k negative, max depth 5 + 50 classifiers and 50% per tree:
 // max depth 2 + 200 classifiers + 20% per tree: 0.50586087
+// Swapping from early-out trunk forest to random forest...
 
 pub struct DetectedFace {
 	pub x: usize,
@@ -33,7 +34,6 @@ const DETECTOR_SIZE:u32 = 48u32;
 pub struct FaceDetector {
 	classifiers: Vec<DecisionTree>,
 	weights: Vec<f32>, // Used to determine how much to emphasize the opinion of one of the classifiers.
-	features: Vec<HaarFeature>,
 }
 
 impl FaceDetector {
@@ -41,33 +41,36 @@ impl FaceDetector {
 		FaceDetector {
 			classifiers: vec![],
 			weights: vec![],
-			features: vec![],
 		}
 	}
 	
 	pub fn detect_face(&self, image_width: usize, image_height: usize, image_data: &Vec<u8>) -> Vec::<DetectedFace> {
 		let mut results = vec![];
+
+		let base_img = GrayImage::from_raw(image_width as u32, image_height as u32, image_data.clone()).expect("Failed to convert byte array to u8 grey image.");
 		
 		//let img = IntegralImage::new_from_image_data(image_width, image_height, image_data);
 		
 		for scale in 5..10 { // 6 - 11 seems big enough
 			assert!(image_width/scale > DETECTOR_SIZE as usize);
 			assert!(image_height/scale > DETECTOR_SIZE as usize);
-			let img = IntegralImage::new_from_image_data_subsampled(image_width, image_height, image_data, image_width/scale, image_height/scale);
+			let img = image::imageops::resize(&base_img, (image_width / scale) as u32, (image_height / scale) as u32, image::imageops::FilterType::Nearest);
 			//fs::write(format!("sample_image_scale_{}_{}x{}.dat", scale, img.width, img.height), img.data);
-			for y in (0..img.height - DETECTOR_SIZE as usize).step_by(DETECTOR_SIZE as usize/3) {
-				for x in (0..img.width - DETECTOR_SIZE as usize).step_by(DETECTOR_SIZE as usize/3) {
-					let roi = img.new_from_region(x, y, x + DETECTOR_SIZE as usize, y + DETECTOR_SIZE as usize);
+			for y in (0..img.height() - DETECTOR_SIZE).step_by(DETECTOR_SIZE as usize/3) {
+				for x in (0..img.width() - DETECTOR_SIZE).step_by(DETECTOR_SIZE as usize/3) {
+					//let roi = image::imageops::crop_imm(&img, x, y, DETECTOR_SIZE, DETECTOR_SIZE);
+					let roi = img.view(x, y, DETECTOR_SIZE, DETECTOR_SIZE).to_image();
 					//fs::write(format!("roi_scale_{}_x{}_y{}_{}x{}.dat", scale, x, y, img.width, img.height), roi.data);
 					//if !self.predict(&roi) { continue; }
 					//if self.predict(&roi) {
-					if self.predict_early_out(&roi, Some(10), Some(40)) {
-						let p = self.probability(&roi);
+					//if self.predict_early_out(&roi, Some(3), Some(40)) {
+					let p = self.probability(&roi);
+					if p > 0.4f32 {
 						let f = DetectedFace {
-							x: scale * x,
-							y: scale * y,
-							width: scale * roi.width,
-							height: scale * roi.height,
+							x: scale * (x as usize),
+							y: scale * (y as usize),
+							width: scale * (DETECTOR_SIZE as usize),
+							height: scale * (DETECTOR_SIZE as usize),
 							//confidence: 0.0f32.max( p)
 							confidence: p
 						};
@@ -81,7 +84,7 @@ impl FaceDetector {
 		results
 	}
 	
-	pub fn probability(&self, example:&IntegralImage) -> f32 {
+	pub fn probability<T : GenericImageView<Pixel=image::Luma<u8>>>(&self, example:&T) -> f32 {
 		let x = self.vectorize_example(example);
 		let mut total = 0f32;
 		let mut possible = 0f32;
@@ -95,76 +98,37 @@ impl FaceDetector {
 		}
 		((total / possible)+1f32) / 2f32
 	}
-	
-	pub fn predict_early_out(&self, example:&IntegralImage, min_positive:Option<u32>, min_negative:Option<u32>) -> bool {
-		let min_positive = min_positive.unwrap_or(self.classifiers.len() as u32/2);
-		let min_negative = min_negative.unwrap_or(self.classifiers.len() as u32/2);
-		let mut positive_count = 0;
-		let mut negative_count = 0;
-		let x = self.vectorize_example(example);
-		for (c, w) in self.classifiers.iter().zip(&self.weights) {
-			if c.predict(&x) {
-				if *w > 0.0 {
-					positive_count += 1;
-				} else {
-					negative_count += 1;
-				}
-			} else {
-				if *w > 0.0 {
-					negative_count += 1;
-				} else {
-					positive_count += 1;
-				}
-			}
-			
-			if positive_count > min_positive {
-				return true;
-			} else if negative_count > min_negative {
-				return false;
-			}
-		}
-		return positive_count > negative_count;
-	}
-	
-	pub fn predict(&self, example:&IntegralImage) -> bool {
+
+	pub fn predict<T : GenericImageView<Pixel=image::Luma<u8>>>(&self, example:&T) -> bool {
 		self.probability(example) > 0.5
 	}
 	
-	fn vectorize_example(&self, example:&IntegralImage) -> Vec<f32> {
-		let mut x = vec![0f32; self.features.len()];
-		for (i, feat) in self.features.iter().enumerate() {
-			x[i] = feat.probability(example);
-		}
-		x
+	fn vectorize_example<T : GenericImageView<Pixel=image::Luma<u8>>>(&self, example:&T) -> Vec<f32> {
+		example.pixels().into_iter().map(|(x, y, px)| { (px.0[0] as f32) / 255.0f32 }).collect()
 	}
 	
-	pub fn train(&mut self, examples:Vec<&IntegralImage>, labels:Vec<bool>) {
+	pub fn train<T : GenericImageView<Pixel=image::Luma<u8>>>(&mut self, examples:Vec<&T>, labels:Vec<bool>) {
 		let mut rng = thread_rng();
 		let mut examples = examples;
 		let mut labels = labels; // We do this seemingly arbitrary reassign to allow us to mutate these refs.
 		
 		// Constants.
 		let sample_rate_per_tree = 0.5f64;
-		let max_depth = 3;
-		let classifiers_to_keep:usize = 200; // Viola + Jones used 38, but they were smaller.
-		
-		// Starting features -- these will be culled at the end.  There might be a _LOT_.
-		self.features = make_3x3_haar(DETECTOR_SIZE as usize, DETECTOR_SIZE as usize);
-		self.features.extend(make_2x2_haar(DETECTOR_SIZE as usize, DETECTOR_SIZE as usize));
+		let max_depth = 5;
+		let classifiers_to_keep:usize = 50;
+
 		self.classifiers.clear();
 		self.weights.clear();
 		
 		// Convert all examples once at the beginning rather than once per loop.
 		let mut converted_examples = vec![];
-		for (example, label) in examples.iter().zip(&labels) {
-			converted_examples.push(self.vectorize_example(example));
+		for example in examples.iter() {
+			converted_examples.push(self.vectorize_example(*example));
 		}
 		
-		// Track our error rates for the final shuffle.
-		let mut false_negative_rates:Vec<u32> = vec![];
-		
 		// Make and train our new classifiers.
-		for _ in 0..classifiers_to_keep {
+		for idx in 0..classifiers_to_keep {
+			println!("Training classifier {}", idx);
 			let mut d = DecisionTree::new();
 			
 			// Randomly sample some data from examples for training.
@@ -180,102 +144,10 @@ impl FaceDetector {
 			// And fit the tree.
 			d.train(&x, &y, max_depth);
 			
-			// Now use the classifier to classify all examples.
-			let mut false_negative_rate:u32 = 0;
-			let mut errors = 0;
-			let mut weight_update_directions = vec![]; // Track the items we got wrong so we can reweight them in the next step.
-			for (x, y) in converted_examples.iter().zip(&labels) {
-				let prediction = d.predict(x);
-				if prediction != *y {
-					errors += 1;
-					weight_update_directions.push(1);
-				} else {
-					weight_update_directions.push(-1);
-				}
-				
-				if prediction == false && *y == true {
-					false_negative_rate += 1;
-				}
-			}
-			
 			// Store D.
 			self.classifiers.push(d);
-			
-			// Store the error rate.
-			false_negative_rates.push(false_negative_rate);
-			
-			// Amount of say = 0.5 * log ((1-error)/error)
-			// If error is HUUUGE this number will be a large NEGATIVE number.
-			let new_classifier_weight = 0.5f32 * ((1.0f32 - errors as f32)/errors as f32);
-			self.weights.push(new_classifier_weight);
-			
-			// Recalculate the sample select probabilities.
-			// If incorrectly classified:
-			// New sample weight = old_sample_weight * e^new_classifier_weight.
-			// If correctly classifier, use -new_classifier_weight.
-			let starting_sample_weight = 1.0f32 / examples.len() as f32;
-			let mut sample_weights = vec![];
-			let mut total_sample_weights = 0f32;
-			for wud in &weight_update_directions {
-				let new_sample_weight = starting_sample_weight * (*wud as f32).exp();
-				sample_weights.push(new_sample_weight);
-				total_sample_weights += new_sample_weight;  // Accumulate for norm.
-			}
-			// Normalize:
-			sample_weights.iter_mut().for_each(|w|{ *w /= total_sample_weights });
-			
-			// Using the new sample weights, construct a new training set.
-			let mut new_examples = vec![];
-			let mut new_labels = vec![];
-			for _ in 0..examples.len() {
-				// TODO: To avoid numeric stability issues, should we be rescaling by weight?
-				let mut tunneling_energy = rng.gen::<f32>();
-				for (i, (x, y)) in examples.iter().zip(&labels).enumerate() {
-					if tunneling_energy < sample_weights[i] {
-						new_examples.push(*x);
-						new_labels.push(*y);
-						break;
-					} else {
-						tunneling_energy -= sample_weights[i];
-					}
-				}
-			}
-			
-			examples = new_examples;
-			labels = new_labels;
+			self.weights.push(1.0f32);
 		}
-		
-		// Sort by false negative rate, lowest first.
-		let mut indices:Vec<usize> = (0..(&self.classifiers).len()).collect();
-		indices.sort_by(|a, b| {
-			// Sort by the performance of the classifier.
-			false_negative_rates[*a].cmp(&false_negative_rates[*b])
-		});
-		let (new_classifiers, new_weights) = indices.iter().map(|i|{ (self.classifiers[*i].clone(), self.weights[*i]) }).unzip();
-		self.classifiers = new_classifiers;
-		self.weights = new_weights;
-		
-		// Compact features.  Pick the elements that are not used by any of the trees and delete them to save space.
-		/*
-		let mut feature_use_count = vec![0u32; self.features.len()]; // Deliberate choice -- we will probably be popping the zeros and don't want to re-update the indices.
-		for c in &self.classifiers {
-			feature_use_count[c.get_decision_feature()] += 1;
-		}
-		let mut feature_indices_to_drop = vec![];
-		for (feature_index, count) in feature_use_count.iter().enumerate() {
-			if *count == 0 {
-				feature_indices_to_drop.push(feature_index);
-			}
-		}
-		for index in feature_indices_to_drop {
-			self.features.remove(index);
-			for c in &self.classifiers {
-				if c.get_decision_feature() > index {
-					// Reduce c's index by one.
-				}
-			}
-		}
-		*/
 	}
 }
 
@@ -290,16 +162,18 @@ mod tests {
 	#[test]
 	#[ignore] // Run with cargo test -- --ignored
 	fn test_train_face_classifier() {
+		println!("Starting up.");
 		let num_positive_examples = 10000;
-		let num_negative_examples = 100000; // Only up to 10k are validated. 2k are thoroughly validated.
+		let num_negative_examples = 10000; // Only up to 10k are validated. 2k are thoroughly validated.
 		let mut rng = thread_rng();
 		
 		// Allocate buffers.
-		let mut examples:Vec<IntegralImage> = vec![];
+		println!("Allocating buffers.");
+		let mut examples:Vec<GrayImage> = Vec::with_capacity(num_negative_examples+num_negative_examples);
 		let mut labels:Vec<bool> = vec![];
-		let mut train_x:Vec<&IntegralImage> = vec![];
+		let mut train_x:Vec<&GrayImage> = vec![];
 		let mut train_y:Vec<bool> = vec![];
-		let mut test_x:Vec<&IntegralImage> = vec![];
+		let mut test_x:Vec<&GrayImage> = vec![];
 		let mut test_y:Vec<bool> = vec![];
 		
 		// Load data.
@@ -309,7 +183,8 @@ mod tests {
 		
 		println!("Reading data.");
 		while let Ok(bytes_read) = positive.read(&mut img_buffer) {
-			let resized = IntegralImage::new_from_image_data_subsampled(128, 128, &img_buffer, DETECTOR_SIZE as usize, DETECTOR_SIZE as usize);
+			let img = image::GrayImage::from_raw(128, 128, img_buffer.clone()).expect("Failed to load gray image from u8 data.");
+			let resized = image::imageops::resize(&img, DETECTOR_SIZE, DETECTOR_SIZE, image::imageops::Nearest);
 			examples.push(resized);
 			labels.push(true);
 			if examples.len() > num_positive_examples {
@@ -317,7 +192,8 @@ mod tests {
 			}
 		}
 		while let Ok(bytes_read) = negative.read(&mut img_buffer) {
-			let resized = IntegralImage::new_from_image_data_subsampled(128, 128, &img_buffer, DETECTOR_SIZE as usize, DETECTOR_SIZE as usize);
+			let img = image::GrayImage::from_raw(128, 128, img_buffer.clone()).expect("Failed to load gray image from u8 data.");
+			let resized = image::imageops::resize(&img, DETECTOR_SIZE, DETECTOR_SIZE, image::imageops::Nearest);
 			examples.push(resized);
 			labels.push(false);
 			if examples.len() > num_negative_examples+num_positive_examples {
